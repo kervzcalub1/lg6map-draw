@@ -9,20 +9,9 @@
   <script src="https://cdn.jsdelivr.net/npm/togeojson@0.16.0/dist/togeojson.umd.js"></script>
   <!-- config.js injected at build time (contains window.__MAPS_API_KEY) -->
   <script src="/config.js"></script>
-  <script>
-    // Attempt to load Google Maps script with injected key.
-    (function() {
-      var key = (window && window.__MAPS_API_KEY) ? window.__MAPS_API_KEY : '';
-      if (!key) {
-        console.error('Google Maps API key missing. Set GOOGLE_MAPS_API_KEY in Vercel env or create public/config.js for local dev.');
-      }
-      var s = document.createElement('script');
-      s.async = true;
-      s.defer = true;
-      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&libraries=geometry&callback=initMap';
-      document.head.appendChild(s);
-    })();
-  </script>
+
+  <!-- Load Google Maps dynamically after config in main.js initializes -->
+  <!-- main.js will inject the Maps script using window.__MAPS_API_KEY -->
 </head>
 <body>
   <header class="appbar">
@@ -34,35 +23,38 @@
 
   <main class="page">
     <div class="map-card" role="region" aria-label="Map container">
-      <!-- Top floating toolbar -->
-      <div class="top-toolbar" id="topToolbar" role="toolbar" aria-label="Drawing toolbar">
-        <button id="btnDrawToggle" class="tb-btn">✏️ Draw</button>
+      <!-- Compact toolbar: only icon when collapsed; expands horizontally in draw mode -->
+      <div id="toolbar" class="toolbar collapsed" aria-label="Drawing toolbar">
+        <button id="toolToggle" class="tool-icon" title="Toggle draw tools">✏️</button>
 
-        <div class="tb-group">
-          <label class="tb-label">Color</label>
-          <select id="tbColor" class="tb-select">
-            <option value="#ff0000">Red</option>
-            <option value="#007bff">Blue</option>
-            <option value="#16a34a">Green</option>
-            <option value="#f59e0b">Yellow</option>
-            <option value="#ffffff">White</option>
-            <option value="#000000">Black</option>
-          </select>
+        <!-- expanded controls -->
+        <div id="toolbarControls" class="controls" aria-hidden="true">
+          <div class="control-group">
+            <label class="label">Color</label>
+            <select id="colorSelect" class="select">
+              <option value="#ff0000" selected>Red</option>
+              <option value="#007bff">Blue</option>
+              <option value="#16a34a">Green</option>
+              <option value="#ffff00">Yellow</option>
+              <option value="#ffffff">White</option>
+              <option value="#000000">Black</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label class="label">Size</label>
+            <select id="sizeSelect" class="select">
+              <option value="3">3 px</option>
+              <option value="5" selected>5 px</option>
+              <option value="10">10 px</option>
+            </select>
+          </div>
+
+          <button id="undoBtn" class="tool-small" title="Undo last stroke">↶</button>
+          <button id="eraseModeBtn" class="tool-small" title="Toggle erase mode">🩹</button>
+          <button id="eraseAllBtn" class="tool-small danger" title="Erase all drawings">🗑️</button>
+          <button id="saveDrawBtn" class="tool-small" title="Save drawings">💾</button>
         </div>
-
-        <div class="tb-group">
-          <label class="tb-label">Size</label>
-          <select id="tbSize" class="tb-select">
-            <option value="3">3 px</option>
-            <option value="5" selected>5 px</option>
-            <option value="10">10 px</option>
-          </select>
-        </div>
-
-        <button id="btnUndo" class="tb-btn small">↶ Undo</button>
-        <button id="btnEraseMode" class="tb-btn small">🩹 Erase</button>
-        <button id="btnEraseAll" class="tb-btn small warn">🗑️ Erase All</button>
-        <button id="btnSaveDraw" class="tb-btn small">💾 Save</button>
       </div>
 
       <div id="map"></div>

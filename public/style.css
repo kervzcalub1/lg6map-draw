@@ -7,64 +7,135 @@
   --panel-w: 340px;
 }
 html,body { height:100%; margin:0; font-family: Inter, Roboto, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial; background:var(--bg); color:#0f172a; }
-
-/* header */
-.appbar {
+header.appbar {
   height:64px; display:flex; align-items:center; justify-content:space-between; padding:0 18px;
   background:linear-gradient(180deg, rgba(255,255,255,0.95), rgba(255,255,255,0.9));
   border-bottom:1px solid #e6edf3; position:fixed; left:0; top:0; right:0; z-index:1200;
 }
-.appbar h1 { font-size:18px; margin:0; font-weight:700; letter-spacing:0.4px; }
-.hamburger { display:inline-flex; align-items:center; justify-content:center; width:44px; height:44px; border-radius:8px; border:0; background:var(--blue); color:#fff; font-size:20px; cursor:pointer; }
+header.appbar h1 { font-size:18px; margin:0; font-weight:700; letter-spacing:0.4px; }
+header.appbar .actions { display:flex; gap:8px; align-items:center; }
 
-/* page layout */
-.page { padding-top:84px; display:flex; justify-content:center; align-items:flex-start; gap:20px; padding-bottom:28px; }
-.map-card { width: min(1100px, 92%); background:#fff; border-radius: var(--card-radius); box-shadow: var(--card-shadow); overflow:hidden; position: relative; }
-#map { width:100%; height: calc(80vh); display:block; }
+/* Layout */
+.page {
+  padding-top:84px;
+  display:flex;
+  justify-content:center;
+  align-items:flex-start;
+  gap:20px;
+  padding-bottom:28px;
+}
+.map-card {
+  width: min(1100px, 92%);
+  background: #ffffff;
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+  overflow:hidden;
+  position: relative;
+}
+#map {
+  width:100%;
+  height: calc(80vh);
+  display:block;
+}
 
-/* toolbar (top floating) */
-.top-toolbar {
+/* Toolbar (collapsed -> expanded) */
+.toolbar {
   position: absolute;
   top: 12px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 1400;
+  z-index: 1500;
   background: rgba(255,255,255,0.95);
   border-radius: 12px;
-  padding: 8px 10px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
+  padding: 6px;
+  display:flex;
+  align-items:center;
+  gap:8px;
   box-shadow: 0 8px 28px rgba(2,6,23,0.08);
-  max-width: calc(100% - 24px);
-  overflow: auto;
+  transition: width 220ms ease, padding 220ms ease;
+  overflow: hidden;
+  max-width: 95%;
 }
-.tb-btn { border: none; background: #0f172a; color: white; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-weight: 700; }
-.tb-btn.small { padding: 6px 8px; font-weight:600; }
-.tb-btn.warn { background: #ef4444; }
-.tb-group { display:flex; flex-direction:column; align-items:flex-start; gap:4px; font-size:12px; }
-.tb-label { font-size:11px; color:#374151; margin-bottom:2px; }
-.tb-select { padding:6px 8px; border-radius:8px; border:1px solid #e6edf3; background:#fff; }
 
-/* history */
-.history-panel { width: var(--panel-w); min-width: 280px; max-width:var(--panel-w); background:#fff; border-radius:12px; box-shadow:var(--card-shadow); padding:14px; height: calc(80vh); overflow:auto; position: sticky; top: 88px; }
-.muted { color:#64748b; font-size:13px; }
-.history-item { padding:10px; border-radius:10px; border:1px solid #eef2f7; margin-bottom:8px; background:#fbfdff; cursor:pointer; }
+/* collapsed: show only tool icon (small circle) */
+.toolbar.collapsed {
+  width: 52px;
+  padding: 6px;
+}
+.tool-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: white;
+  border: none;
+  font-weight:700;
+  display: inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(2,6,23,0.12);
+}
+.toolbar .controls {
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
 
-/* popup */
+/* expanded state */
+.toolbar:not(.collapsed) {
+  width: auto;
+  padding: 8px 12px;
+}
+.label { font-size:12px; color:#374151; margin-bottom:4px; display:block; }
+.control-group { display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
+.select { padding:6px 8px; border-radius:8px; border:1px solid #e6edf3; background:#fff; font-size:13px; }
+
+/* small buttons */
+.tool-small {
+  border: none;
+  background: #0f172a;
+  color: #fff;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight:700;
+}
+.tool-small.danger { background: #ef4444; }
+
+/* Right panel (history) */
+.history-panel {
+  width: var(--panel-w);
+  min-width: 280px;
+  max-width: var(--panel-w);
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+  padding: 14px;
+  height: calc(80vh);
+  overflow:auto;
+  position: sticky;
+  top: 88px;
+}
+
+/* popup content */
 .popup-content { width:100%; max-width:360px; box-sizing:border-box; padding:8px; font-family:inherit; }
 .popup-img { width:100%; height:160px; object-fit:cover; border-radius:8px; display:block; margin-bottom:8px; }
 .popup-note { width:100%; min-height:80px; padding:8px; border-radius:6px; border:1px solid #d1d5db; resize:vertical; }
 .popup-row { display:flex; gap:8px; margin-top:8px; }
 .popup-btn { flex:1; padding:8px 10px; border-radius:8px; border:0; font-weight:600; cursor:pointer; }
-.btn-save { background: var(--red); color:#fff; }
+.btn-save { background:var(--red); color:#fff; }
 .btn-delete { background:#dc3545; color:#fff; }
 .close-x { position:absolute; right:10px; top:10px; width:34px; height:34px; border-radius:8px; background:#fff; border:1px solid #e6edf3; display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 4px 10px rgba(2,6,23,0.06); }
 
-/* mobile responsiveness */
-@media (max-width:767.98px) {
-  .page { flex-direction: column; align-items:center; padding-top:72px; }
+.muted { color:#64748b; font-size:13px; }
+.history-item { padding:10px; border-radius:10px; border:1px solid #eef2f7; margin-bottom:8px; background: #fbfdff; cursor:pointer; }
+
+/* mobile behavior */
+@media (max-width: 767.98px) {
+  .page { padding-top:72px; flex-direction:column; align-items:center; }
   .history-panel { display:none; }
   #map { height: calc(70vh); }
-  .top-toolbar { left: 12px; transform: none; width: calc(100% - 24px); overflow-x: auto; }
+  .toolbar { left: 12px; transform: none; width: calc(100% - 24px); }
+  .toolbar.collapsed { width: 52px; right: 12px; left: auto; transform: none; }
 }
