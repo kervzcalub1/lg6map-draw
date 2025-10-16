@@ -1,77 +1,97 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LG6 MAP DRAW</title>
-
-    <!-- Main stylesheet -->
-    <link rel="stylesheet" href="/style.css" />
-
-    <style>
-      /* Fallback styling if style.css hasn’t loaded yet */
-      body, html {
-        margin: 0;
-        padding: 0;
-        height: 100%;
-        width: 100%;
+<head>
+  <meta charset="utf-8" />
+  <title>LG 6 MAP</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/togeojson@0.16.0/dist/togeojson.umd.js"></script>
+  <!-- config.js injected at build time (contains window.__MAPS_API_KEY) -->
+  <script src="/config.js"></script>
+  <script>
+    // Attempt to load Google Maps script with injected key.
+    (function() {
+      var key = (window && window.__MAPS_API_KEY) ? window.__MAPS_API_KEY : '';
+      if (!key) {
+        console.error('Google Maps API key missing. Set GOOGLE_MAPS_API_KEY in Vercel env or create public/config.js for local dev.');
       }
+      var s = document.createElement('script');
+      s.async = true;
+      s.defer = true;
+      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&libraries=geometry&callback=initMap';
+      document.head.appendChild(s);
+    })();
+  </script>
+</head>
+<body>
+  <header class="appbar">
+    <h1>LG 6 MAP</h1>
+    <div class="actions">
+      <button id="openHistoryMobile" class="hamburger d-md-none" title="History (mobile)">☰</button>
+    </div>
+  </header>
 
-      #map {
-        width: 100%;
-        height: 100vh;
-      }
+  <main class="page">
+    <div class="map-card" role="region" aria-label="Map container">
+      <!-- Top floating toolbar -->
+      <div class="top-toolbar" id="topToolbar" role="toolbar" aria-label="Drawing toolbar">
+        <button id="btnDrawToggle" class="tb-btn">✏️ Draw</button>
 
-      .loading-msg {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background: white;
-        padding: 12px 18px;
-        border-radius: 8px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-        font-family: sans-serif;
-      }
-    </style>
-  </head>
+        <div class="tb-group">
+          <label class="tb-label">Color</label>
+          <select id="tbColor" class="tb-select">
+            <option value="#ff0000">Red</option>
+            <option value="#007bff">Blue</option>
+            <option value="#16a34a">Green</option>
+            <option value="#f59e0b">Yellow</option>
+            <option value="#ffffff">White</option>
+            <option value="#000000">Black</option>
+          </select>
+        </div>
 
-  <body>
-    <!-- Map container -->
-    <div id="map"></div>
+        <div class="tb-group">
+          <label class="tb-label">Size</label>
+          <select id="tbSize" class="tb-select">
+            <option value="3">3 px</option>
+            <option value="5" selected>5 px</option>
+            <option value="10">10 px</option>
+          </select>
+        </div>
 
-    <!-- Optional loading message -->
-    <div id="loading" class="loading-msg">Loading map...</div>
+        <button id="btnUndo" class="tb-btn small">↶ Undo</button>
+        <button id="btnEraseMode" class="tb-btn small">🩹 Erase</button>
+        <button id="btnEraseAll" class="tb-btn small warn">🗑️ Erase All</button>
+        <button id="btnSaveDraw" class="tb-btn small">💾 Save</button>
+      </div>
 
-    <!-- STEP 1: Load the config (where the API key is stored) -->
-    <script src="/config.js"></script>
+      <div id="map"></div>
+    </div>
 
-    <!-- STEP 2: Load your main logic -->
-    <script src="/main.js"></script>
+    <aside class="history-panel d-none d-md-block" id="historyPanelDesktop" aria-label="History Panel">
+      <h4 style="margin-top:4px">History & Logs</h4>
+      <p class="muted" style="margin-bottom:10px">Saved marker changes are shown here (click to review).</p>
+      <div id="historyList"></div>
+      <div style="margin-top:12px">
+        <button id="resetAll" class="btn btn-outline-secondary w-100">Reset All Saved</button>
+      </div>
+    </aside>
+  </main>
 
-    <!-- STEP 3: Dynamically load Google Maps JS API after everything else -->
-    <script>
-      function loadGoogleMaps() {
-        // Ensure the API key exists
-        if (!window.__MAPS_API_KEY) {
-          console.error("❌ API key not found in config.js");
-          const loading = document.getElementById("loading");
-          if (loading) loading.innerText = "API key not found!";
-          return;
-        }
+  <div class="offcanvas offcanvas-end" tabindex="-1" id="mobileHistory" aria-labelledby="mobileHistoryLabel">
+    <div class="offcanvas-header">
+      <h5 id="mobileHistoryLabel">History</h5>
+      <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body">
+      <div id="historyListMobile"></div>
+      <div class="mt-3">
+        <button id="resetAllMobile" class="btn btn-outline-secondary w-100">Reset All Saved</button>
+      </div>
+    </div>
+  </div>
 
-        // Inject Google Maps script dynamically
-        const script = document.createElement("script");
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${window.__MAPS_API_KEY}&libraries=drawing,geometry&callback=initMap`;
-        script.async = true;
-        script.defer = true;
-
-        // Append to head so it loads properly
-        document.head.appendChild(script);
-      }
-
-      // Wait for everything else to load first
-      window.addEventListener("load", loadGoogleMaps);
-    </script>
-  </body>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="/main.js"></script>
+</body>
 </html>
