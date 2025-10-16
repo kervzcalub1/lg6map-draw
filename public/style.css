@@ -15,7 +15,7 @@ header.appbar {
 header.appbar h1 { font-size:18px; margin:0; font-weight:700; letter-spacing:0.4px; }
 header.appbar .actions { display:flex; gap:8px; align-items:center; }
 
-/* Layout */
+/* layout */
 .page {
   padding-top:84px;
   display:flex;
@@ -31,79 +31,51 @@ header.appbar .actions { display:flex; gap:8px; align-items:center; }
   box-shadow: var(--card-shadow);
   overflow:hidden;
   position: relative;
+  padding-top: 12px; /* space for toolbar above map */
 }
+
+/* map */
 #map {
   width:100%;
-  height: calc(80vh);
+  height: calc(80vh - 12px);
   display:block;
+  border-bottom-left-radius: var(--card-radius);
+  border-bottom-right-radius: var(--card-radius);
 }
 
-/* Toolbar (collapsed -> expanded) */
-.toolbar {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1500;
-  background: rgba(255,255,255,0.95);
+/* toolbar above map-card */
+.draw-toolbar {
+  width: min(980px, 92%);
+  margin: 0 auto 8px auto;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  justify-content:flex-start;
+  transition: all 180ms ease;
+  padding: 6px;
   border-radius: 12px;
-  padding: 6px;
-  display:flex;
-  align-items:center;
-  gap:8px;
-  box-shadow: 0 8px 28px rgba(2,6,23,0.08);
-  transition: width 220ms ease, padding 220ms ease;
-  overflow: hidden;
-  max-width: 95%;
+  background: rgba(255,255,255,0.98);
+  box-shadow: 0 8px 28px rgba(2,6,23,0.06);
 }
-
-/* collapsed: show only tool icon (small circle) */
-.toolbar.collapsed {
-  width: 52px;
+.draw-toolbar.collapsed {
+  width: 60px;
   padding: 6px;
 }
-.tool-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: #0f172a;
-  color: white;
-  border: none;
-  font-weight:700;
-  display: inline-flex;
-  align-items:center;
-  justify-content:center;
-  cursor: pointer;
-  box-shadow: 0 6px 18px rgba(2,6,23,0.12);
+.tb-icon {
+  width:46px; height:46px; border-radius:10px; border:0; background:#0f172a; color:#fff; font-weight:700; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
 }
-.toolbar .controls {
-  display:flex;
-  align-items:center;
-  gap:8px;
-}
+.tb-controls { display:flex; align-items:center; gap:8px; }
+.tb-controls[aria-hidden="true"] { display:none; }
 
-/* expanded state */
-.toolbar:not(.collapsed) {
-  width: auto;
-  padding: 8px 12px;
-}
-.label { font-size:12px; color:#374151; margin-bottom:4px; display:block; }
-.control-group { display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
-.select { padding:6px 8px; border-radius:8px; border:1px solid #e6edf3; background:#fff; font-size:13px; }
+.ctrl { display:flex; flex-direction:column; }
+.lbl { font-size:12px; color:#374151; margin-bottom:4px; }
+.sel { padding:6px 8px; border-radius:8px; border:1px solid #e6edf3; background:#fff; font-size:13px; }
 
-/* small buttons */
-.tool-small {
-  border: none;
-  background: #0f172a;
-  color: #fff;
-  padding: 6px 8px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight:700;
-}
-.tool-small.danger { background: #ef4444; }
+.small { border: none; background: #0f172a; color: #fff; padding: 8px 10px; border-radius: 8px; cursor:pointer; font-weight:700; }
+.small.danger { background: #ef4444; }
 
-/* Right panel (history) */
+/* Right panel */
 .history-panel {
   width: var(--panel-w);
   min-width: 280px;
@@ -118,7 +90,7 @@ header.appbar .actions { display:flex; gap:8px; align-items:center; }
   top: 88px;
 }
 
-/* popup content */
+/* popup styles (same as before) */
 .popup-content { width:100%; max-width:360px; box-sizing:border-box; padding:8px; font-family:inherit; }
 .popup-img { width:100%; height:160px; object-fit:cover; border-radius:8px; display:block; margin-bottom:8px; }
 .popup-note { width:100%; min-height:80px; padding:8px; border-radius:6px; border:1px solid #d1d5db; resize:vertical; }
@@ -131,11 +103,11 @@ header.appbar .actions { display:flex; gap:8px; align-items:center; }
 .muted { color:#64748b; font-size:13px; }
 .history-item { padding:10px; border-radius:10px; border:1px solid #eef2f7; margin-bottom:8px; background: #fbfdff; cursor:pointer; }
 
-/* mobile behavior */
+/* mobile */
 @media (max-width: 767.98px) {
   .page { padding-top:72px; flex-direction:column; align-items:center; }
   .history-panel { display:none; }
-  #map { height: calc(70vh); }
-  .toolbar { left: 12px; transform: none; width: calc(100% - 24px); }
-  .toolbar.collapsed { width: 52px; right: 12px; left: auto; transform: none; }
+  #map { height: calc(70vh - 12px); }
+  .draw-toolbar { width: calc(100% - 24px); margin-left:12px; margin-right:12px; }
+  .draw-toolbar.collapsed { width: 60px; }
 }

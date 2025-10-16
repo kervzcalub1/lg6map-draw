@@ -1,14 +1,14 @@
-/* main.js - LG6 MAP main logic (vanilla JS)
-   - Assumes /config.js exists and contains window.__MAPS_API_KEY
-   - Place this file in /public along with index.html and style.css
-*/
+// main.js - full app logic for lg6map-draw
+// Expects /config.js to exist (window.__MAPS_API_KEY)
+// Place this file in /public along with index.html and style.css
 
+/* ---------- CONFIG ---------- */
 const KML_RAW_URL = 'https://raw.githubusercontent.com/kervzcalub1/lg6map/refs/heads/main/kml/Untitled%20project.kml';
 const LS_MARKERS = 'lg6map_markers_v1';
 const LS_HISTORY = 'lg6map_history_v1';
 const DRAW_LS_KEY = 'lg6map_drawings_v1';
 
-// built-in markers list (lat,lng,image)
+// Built-in markers (lat,lng,image)
 const builtInMarkers = [
   { lat: 7.083483615107523, lng: 125.62724728562387, image: 'https://picsum.photos/id/1015/800/560' },
   { lat: 7.0837635750295025, lng: 125.62749048383216, image: 'https://picsum.photos/id/1016/800/560' },
@@ -25,64 +25,26 @@ const builtInMarkers = [
   { lat: 7.084852571172857, lng: 125.62841246788105, image: 'https://picsum.photos/id/1040/800/560' },
 ];
 
-// util pin svg
+// SVG pin helper
 function makePinSVG(color = '#007bff', size = 36) {
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 24 24'><path fill='${color}' d='M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z'/><circle cx='12' cy='9' r='2.5' fill='#fff'/></svg>`;
   return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
 
-/* APP STATE */
+/* ---------- APP STATE ---------- */
 let map;
 let markerObjects = []; // {id, marker, note, date, saved, image, labelWindow}
 let historyArr = [];
 
-/* DRAWING STATE */
+// Drawing state
 let drawMode = false;
 let eraseMode = false;
 let currentColor = '#ff0000'; // default red
 let currentSize = 5;
-let strokes = []; // google.maps.Polyline[]
-let strokePaths = []; // array of arrays: {lat,lng,color,weight}
+let strokes = []; // google.maps.Polyline objects
+let strokePaths = []; // array of arrays of {lat,lng,color,weight}
 
-/* LOAD PERSISTED DRAWINGS */
-function loadDrawings() {
-  try {
-    const raw = localStorage.getItem(DRAW_LS_KEY);
-    if (!raw) return;
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return;
-    strokePaths = arr;
-    // draw them if map is ready
-    if (map && strokePaths.length) {
-      strokePaths.forEach(path => {
-        const latlngs = path.map(p => new google.maps.LatLng(p.lat, p.lng));
-        const poly = new google.maps.Polyline({
-          path: latlngs,
-          map,
-          strokeColor: path[0].color || '#ff0000',
-          strokeOpacity: 0.95,
-          strokeWeight: path[0].weight || 5,
-          clickable: false,
-          geodesic: true
-        });
-        strokes.push(poly);
-      });
-    }
-  } catch (e) {
-    console.warn('loadDrawings error', e);
-  }
-}
-
-function saveDrawings() {
-  try {
-    localStorage.setItem(DRAW_LS_KEY, JSON.stringify(strokePaths));
-    alert('Drawings saved.');
-  } catch (e) {
-    console.warn('saveDrawings error', e);
-  }
-}
-
-/* MARKER / HISTORY PERSISTENCE */
+/* ---------- PERSISTENCE ---------- */
 function loadState() {
   try {
     const ms = JSON.parse(localStorage.getItem(LS_MARKERS) || 'null');
@@ -104,7 +66,22 @@ function saveState() {
   }
 }
 
-/* HISTORY UI */
+function loadDrawingsFromStorage() {
+  try {
+    const raw = localStorage.getItem(DRAW_LS_KEY);
+    if (!raw) return;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return;
+    strokePaths = arr;
+  } catch (e) { console.warn('loadDrawingsFromStorage', e); }
+}
+function saveDrawingsToStorage() {
+  try {
+    localStorage.setItem(DRAW_LS_KEY, JSON.stringify(strokePaths));
+  } catch (e) { console.warn('saveDrawingsToStorage', e); }
+}
+
+/* ---------- HISTORY UI ---------- */
 function renderHistory() {
   const list = document.getElementById('historyList');
   const listMobile = document.getElementById('historyListMobile');
@@ -128,7 +105,6 @@ function renderHistory() {
   });
 }
 
-/* Review history item */
 let reviewWindow = null;
 function reviewHistory(h) {
   if (reviewWindow) { reviewWindow.close(); reviewWindow = null; }
@@ -149,7 +125,7 @@ function reviewHistory(h) {
   map.panTo(pos);
 }
 
-/* Popup / Marker UI (preserve prior behavior) */
+/* ---------- MARKER POPUP ---------- */
 let openInfoWindow = null;
 function showSavedLabel(mObj) {
   if (mObj.labelWindow) { mObj.labelWindow.close(); mObj.labelWindow = null; }
@@ -269,11 +245,11 @@ function openMarkerPopup(mObj) {
   openInfoWindow = infoWindow;
 }
 
-/* DRAWING IMPLEMENTATION (mouse & touch) */
+/* ---------- DRAWING IMPLEMENTATION ---------- */
 let isDrawing = false;
 let currentPolyline = null;
 
-// Helper: create a new polyline
+// helper to create polyline and record path array
 function startPolyline(color, weight) {
   const pl = new google.maps.Polyline({
     path: [],
@@ -285,32 +261,94 @@ function startPolyline(color, weight) {
     geodesic: true
   });
   strokes.push(pl);
-  strokePaths.push([]); // push empty path container
+  strokePaths.push([]); // new path container
   return pl;
 }
 
-// attach drawing handlers when drawMode is active
+function rebuildStrokesFromPaths() {
+  // clear existing polylines
+  strokes.forEach(s => s.setMap(null));
+  strokes = [];
+  strokePaths.forEach(path => {
+    if (!path || path.length < 2) return;
+    const pts = path.map(p => new google.maps.LatLng(p.lat, p.lng));
+    const poly = new google.maps.Polyline({
+      path: pts,
+      map,
+      strokeColor: path[0].color || '#ff0000',
+      strokeOpacity: 0.95,
+      strokeWeight: path[0].weight || 5,
+      clickable: false,
+      geodesic: true
+    });
+    strokes.push(poly);
+  });
+}
+
+/* erase helper: remove stroke segments near latlng (simple approach) */
+function eraseAtLatLng(latLng, radiusMeters = 8) {
+  const R = 6371000;
+  let changed = false;
+  for (let i = strokePaths.length - 1; i >= 0; i--) {
+    const path = strokePaths[i];
+    const filtered = path.filter(pt => {
+      const dLat = (pt.lat - latLng.lat()) * Math.PI/180;
+      const dLng = (pt.lng - latLng.lng()) * Math.PI/180;
+      const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pt.lat*Math.PI/180)*Math.cos(latLng.lat()*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      const dist = R * c;
+      return dist > radiusMeters;
+    });
+    if (filtered.length !== path.length) changed = true;
+    if (filtered.length < 2) {
+      // remove entire stroke
+      strokePaths.splice(i, 1);
+    } else {
+      strokePaths[i] = filtered;
+    }
+  }
+  if (changed) {
+    rebuildStrokesFromPaths();
+    saveDrawingsToStorage();
+  }
+}
+
+function undoLastStroke() {
+  if (strokes.length === 0) return;
+  const last = strokes.pop();
+  last.setMap(null);
+  strokePaths.pop();
+  saveDrawingsToStorage();
+}
+
+function clearAllDrawings() {
+  // Erase all but DO NOT disable drawMode
+  strokes.forEach(s => s.setMap(null));
+  strokes = [];
+  strokePaths = [];
+  saveDrawingsToStorage();
+}
+
+/* Attach drawing handlers (mouse + touch). Called when drawMode toggled ON */
 function attachDrawingHandlers() {
-  // remove previous listeners to avoid duplicates
+  // remove old listeners
   google.maps.event.clearListeners(map, 'mousedown');
   google.maps.event.clearListeners(map, 'mousemove');
   google.maps.event.clearListeners(map, 'mouseup');
-  google.maps.event.clearListeners(map, 'touchstart');
-  google.maps.event.clearListeners(map, 'touchmove');
-  google.maps.event.clearListeners(map, 'touchend');
 
-  // get overlay for projection (for touch)
-  if (!map.__projectionOverlay) {
-    function ProjectionOverlay() {}
-    ProjectionOverlay.prototype = new google.maps.OverlayView();
-    ProjectionOverlay.prototype.onAdd = function() {};
-    ProjectionOverlay.prototype.draw = function() {};
-    ProjectionOverlay.prototype.onRemove = function() {};
-    map.__projectionOverlay = new ProjectionOverlay();
-    map.__projectionOverlay.setMap(map);
+  const mapDiv = map.getDiv();
+
+  // ensure Projection overlay to convert pixel -> latlng for touch
+  if (!map.__projOverlay) {
+    function P() {}
+    P.prototype = new google.maps.OverlayView();
+    P.prototype.onAdd = function() {};
+    P.prototype.draw = function() {};
+    P.prototype.onRemove = function() {};
+    map.__projOverlay = new P();
+    map.__projOverlay.setMap(map);
   }
 
-  // Mouse events
   map.addListener('mousedown', (e) => {
     if (!drawMode) return;
     if (eraseMode) {
@@ -321,7 +359,7 @@ function attachDrawingHandlers() {
     currentPolyline = startPolyline(currentColor, currentSize);
     currentPolyline.getPath().push(e.latLng);
     strokePaths[strokePaths.length - 1].push({ lat: e.latLng.lat(), lng: e.latLng.lng(), color: currentColor, weight: currentSize });
-    // temporarily disable map drag to avoid panning while drawing
+    // disable map drag to avoid panning
     map.setOptions({ draggable: false, gestureHandling: 'none' });
   });
 
@@ -336,17 +374,16 @@ function attachDrawingHandlers() {
     isDrawing = false;
     currentPolyline = null;
     map.setOptions({ draggable: true, gestureHandling: 'greedy' });
-    saveDrawings(); // autosave
+    saveDrawingsToStorage();
   });
 
-  // Touch events (use container pixel -> latlng)
-  const mapDiv = map.getDiv();
+  // touch handlers
   mapDiv.addEventListener('touchstart', (ev) => {
     if (!drawMode) return;
     const touch = ev.touches[0];
     const rect = mapDiv.getBoundingClientRect();
     const px = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
-    const proj = map.__projectionOverlay.getProjection();
+    const proj = map.__projOverlay.getProjection();
     if (!proj) return;
     const latLng = proj.fromContainerPixelToLatLng(new google.maps.Point(px.x, px.y));
     if (eraseMode) { eraseAtLatLng(latLng, currentSize * 1.5); return; }
@@ -362,7 +399,7 @@ function attachDrawingHandlers() {
     const touch = ev.touches[0];
     const rect = mapDiv.getBoundingClientRect();
     const px = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
-    const proj = map.__projectionOverlay.getProjection();
+    const proj = map.__projOverlay.getProjection();
     if (!proj) return;
     const latLng = proj.fromContainerPixelToLatLng(new google.maps.Point(px.x, px.y));
     if (eraseMode) { eraseAtLatLng(latLng, currentSize * 1.5); return; }
@@ -376,180 +413,102 @@ function attachDrawingHandlers() {
     isDrawing = false;
     currentPolyline = null;
     map.setOptions({ draggable: true, gestureHandling: 'greedy' });
-    saveDrawings();
+    saveDrawingsToStorage();
   }, { passive: true });
 }
 
+/* Detach drawing handlers (when drawMode OFF) */
 function detachDrawingHandlers() {
   google.maps.event.clearListeners(map, 'mousedown');
   google.maps.event.clearListeners(map, 'mousemove');
   google.maps.event.clearListeners(map, 'mouseup');
-  // touch listeners attached to div remain — but will noop since drawMode false
+  // touch listeners remain but will no-op because drawMode=false
 }
 
-/* erase helper: remove points/paths near latlng */
-function eraseAtLatLng(latLng, radiusMeters = 10) {
-  const R = 6371000;
-  let changed = false;
-  for (let i = strokePaths.length - 1; i >= 0; i--) {
-    const path = strokePaths[i];
-    const filtered = path.filter(pt => {
-      const dLat = (pt.lat - latLng.lat()) * Math.PI/180;
-      const dLng = (pt.lng - latLng.lng()) * Math.PI/180;
-      const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pt.lat*Math.PI/180)*Math.cos(latLng.lat()*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      const dist = R * c;
-      return dist > radiusMeters; // keep if further than radius
-    });
-    if (filtered.length !== path.length) changed = true;
-    if (filtered.length < 2) {
-      // remove the entire stroke
-      strokePaths.splice(i, 1);
-    } else {
-      strokePaths[i] = filtered;
-    }
-  }
-  if (changed) {
-    // rebuild polylines
-    strokes.forEach(s => s.setMap(null));
-    strokes = [];
-    strokePaths.forEach(path => {
-      const pts = path.map(p => new google.maps.LatLng(p.lat, p.lng));
-      const poly = new google.maps.Polyline({
-        path: pts,
-        map,
-        strokeColor: path[0].color || '#ff0000',
-        strokeOpacity: 0.95,
-        strokeWeight: path[0].weight || 5,
-        clickable: false,
-        geodesic: true
-      });
-      strokes.push(poly);
-    });
-    saveDrawings();
-  }
-}
-
-/* undo last stroke */
-function undoLastStroke() {
-  if (strokes.length === 0) return;
-  const last = strokes.pop();
-  last.setMap(null);
-  strokePaths.pop();
-  saveDrawings();
-}
-
-/* clear all strokes with confirmation */
-function clearAllStrokes() {
-  if (!confirm('Erase ALL drawings? This cannot be undone.')) return;
-  strokes.forEach(s => s.setMap(null));
-  strokes = [];
-  strokePaths = [];
-  saveDrawings();
-  // also exit draw mode and update toolbar
-  drawMode = false;
-  eraseMode = false;
-  updateToolbarUI();
-}
-
-/* toolbar UI wiring */
+/* ---------- TOOLBAR UI ---------- */
 function updateToolbarUI() {
-  const toolbar = document.getElementById('toolbar');
+  const toolbar = document.getElementById('drawToolbar');
   const controls = document.getElementById('toolbarControls');
-  const toolToggle = document.getElementById('toolToggle');
-
+  if (!toolbar || !controls) return;
   if (drawMode) {
     toolbar.classList.remove('collapsed');
     controls.setAttribute('aria-hidden', 'false');
-    // show controls and attach handlers
     attachDrawingHandlers();
   } else {
     toolbar.classList.add('collapsed');
     controls.setAttribute('aria-hidden', 'true');
     detachDrawingHandlers();
   }
-
-  // update tool icon tooltip
-  toolToggle.title = drawMode ? 'Stop drawing' : 'Open drawing tools';
 }
 
-/* hook toolbar buttons */
 function setupToolbarControls() {
-  const toolToggle = document.getElementById('toolToggle');
-  const colorSelect = document.getElementById('colorSelect');
-  const sizeSelect = document.getElementById('sizeSelect');
-  const undoBtn = document.getElementById('undoBtn');
-  const eraseModeBtn = document.getElementById('eraseModeBtn');
-  const eraseAllBtn = document.getElementById('eraseAllBtn');
-  const saveDrawBtn = document.getElementById('saveDrawBtn');
+  const btnToggle = document.getElementById('btnToggleDraw');
+  const tbColor = document.getElementById('tbColor');
+  const tbSize = document.getElementById('tbSize');
+  const btnUndo = document.getElementById('btnUndo');
+  const btnEraseMode = document.getElementById('btnEraseMode');
+  const btnEraseAll = document.getElementById('btnEraseAll');
+  const btnSaveDraw = document.getElementById('btnSaveDraw');
 
-  // start collapsed
-  drawMode = false; eraseMode = false;
-  updateToolbarUI();
+  // initial values from UI
+  currentColor = tbColor.value || '#ff0000';
+  currentSize = parseInt(tbSize.value, 10) || 5;
 
-  toolToggle.addEventListener('click', () => {
-    // If collapsed -> expand to drawing (toggle)
+  btnToggle.addEventListener('click', () => {
     drawMode = !drawMode;
-    if (!drawMode) eraseMode = false;
+    if (!drawMode) eraseMode = false; // if turning off, clear erase mode
     updateToolbarUI();
   });
 
-  colorSelect.addEventListener('change', (e) => {
-    currentColor = e.target.value;
-  });
-  // ensure defaults reflect UI
-  currentColor = colorSelect.value;
+  tbColor.addEventListener('change', (e) => { currentColor = e.target.value; });
+  tbSize.addEventListener('change', (e) => { currentSize = parseInt(e.target.value, 10) || 5; });
 
-  sizeSelect.addEventListener('change', (e) => {
-    currentSize = parseInt(e.target.value, 10) || 5;
-  });
-  currentSize = parseInt(sizeSelect.value, 10) || 5;
+  btnUndo.addEventListener('click', () => undoLastStroke());
 
-  undoBtn.addEventListener('click', () => undoLastStroke());
-
-  eraseModeBtn.addEventListener('click', () => {
+  btnEraseMode.addEventListener('click', () => {
     eraseMode = !eraseMode;
-    eraseModeBtn.classList.toggle('active', eraseMode);
-    // if eraseMode enabled, ensure drawMode also enabled so handlers active
-    if (eraseMode && !drawMode) {
-      drawMode = true;
-      updateToolbarUI();
-    }
+    btnEraseMode.classList.toggle('active', eraseMode);
+    // if enabling erase mode and drawMode is off, enable drawMode handlers so erase works
+    if (eraseMode && !drawMode) { drawMode = true; updateToolbarUI(); }
   });
 
-  eraseAllBtn.addEventListener('click', () => {
-    if (!confirm('Erase all drawings? This will clear everything.')) return;
-    clearAllStrokes();
-    // after erase all, collapse toolbar to avoid inconsistent state
-    drawMode = false; eraseMode = false; updateToolbarUI();
+  btnEraseAll.addEventListener('click', () => {
+    if (!confirm('Erase all drawings? This cannot be undone.')) return;
+    clearAllDrawings();
+    // DO NOT change drawMode — keep it as requested
+    rebuildStrokesFromPaths();
   });
 
-  saveDrawBtn.addEventListener('click', () => saveDrawings());
+  btnSaveDraw.addEventListener('click', () => {
+    saveDrawingsToStorage();
+    alert('Drawings saved.');
+  });
 }
 
-/* KML load + map initialization and markers */
-function initMap() {
-  console.info('initMap start');
-  // default center - use center of markers as fallback
-  const fallbackCenter = { lat: builtInMarkers[0].lat, lng: builtInMarkers[0].lng };
-  map = new google.maps.Map(document.getElementById('map'), {
-    center: fallbackCenter,
-    zoom: 20,
-    mapTypeId: 'hybrid',
-    tilt: 0, // top-down
-    streetViewControl: false,
-    gestureHandling: 'greedy',
-    rotateControl: true,
+/* ---------- KML + MARKERS + MAP ---------- */
+function fitMapToDataBounds() {
+  // Fit to drawn data or markers if KML not present
+  const b = new google.maps.LatLngBounds();
+  let extended = false;
+  // try data layer
+  map.data.forEach(function(feature) {
+    feature.getGeometry().forEach && feature.getGeometry().forEach(function(g) {
+      // iterate geometry coordinates if possible
+      // simple approach: try extending bounds with coordinate points
+      // We'll do a more robust loop when creating the geojson fallback
+    });
+    extended = true;
   });
+  if (!extended) {
+    // fit markers
+    const bounds = new google.maps.LatLngBounds();
+    builtInMarkers.forEach(m => bounds.extend({ lat: m.lat, lng: m.lng }));
+    if (!bounds.isEmpty()) map.fitBounds(bounds);
+  }
+}
 
-  // Load persisted drawings (if any)
-  loadDrawings();
-
-  // Restore markers from storage (or create new)
-  const restored = loadState();
-  if (restored && Array.isArray(restored)) console.info('Restored marker state from localStorage');
-
-  // create markers
+function createMarkers(restored) {
+  markerObjects = [];
   builtInMarkers.forEach((m, i) => {
     const id = i + 1;
     let initial = { id, note:'', date:'', saved:false, image: m.image };
@@ -571,11 +530,12 @@ function initMap() {
     gm.addListener('click', () => openMarkerPopup(mObj));
     markerObjects.push(mObj);
   });
+}
 
-  // Try loading KML via KmlLayer and fit to bounds when ready
+function loadKmlThenFit(restoredMarkers) {
   let kmlLoaded = false;
   try {
-    const kmlLayer = new google.maps.KmlLayer({ url: KML_RAW_URL, map: map, preserveViewport: true, suppressInfoWindows: true });
+    const kmlLayer = new google.maps.KmlLayer({ url: KML_RAW_URL, map: map, preserveViewport: false, suppressInfoWindows: true });
     kmlLayer.addListener('defaultviewport_changed', () => {
       try {
         const bounds = kmlLayer.getDefaultViewport();
@@ -583,88 +543,144 @@ function initMap() {
           map.fitBounds(bounds);
           kmlLoaded = true;
         }
-      } catch (e) {
-        console.warn('kml defaultviewport_changed error', e);
-      }
+      } catch (e) { console.warn('kml viewport error', e); }
     });
-    kmlLayer.addListener('status_changed', () => {
-      console.info('KML status:', kmlLayer.getStatus && kmlLayer.getStatus());
-    });
+    kmlLayer.addListener('status_changed', () => console.info('KML status:', kmlLayer.getStatus && kmlLayer.getStatus()));
   } catch (e) {
-    console.warn('KmlLayer init failed:', e);
+    console.warn('KML Layer init failed:', e);
   }
 
-  // fallback: try to fetch and render KML via toGeoJSON then fit bounds
+  // fallback: fetch KML text and render via toGeoJSON, then fit bounds
   fetch(KML_RAW_URL).then(r => {
     if (!r.ok) throw new Error('KML fetch failed: ' + r.status);
     return r.text();
   }).then(kmlText => {
-    const parser = new DOMParser();
-    const kmlDoc = parser.parseFromString(kmlText, 'text/xml');
-    const geojson = toGeoJSON.kml(kmlDoc);
-    map.data.addGeoJson(geojson);
-    map.data.setStyle({ strokeColor:'#ff0000', strokeWeight:2, fillOpacity:0.05 });
-    // try to fit to data bounds
-    const bounds = new google.maps.LatLngBounds();
-    map.data.forEach(function(feature) {
-      const geom = feature.getGeometry();
-      const extendBounds = (g) => {
-        if (g instanceof google.maps.Data.Point) {
-          bounds.extend(g.get());
-        } else if (g instanceof google.maps.Data.LineString || g instanceof google.maps.Data.MultiLineString) {
-          g.getArray().forEach(p => bounds.extend(p));
-        } else if (g instanceof google.maps.Data.Polygon || g instanceof google.maps.Data.MultiPolygon) {
-          g.getArray().forEach(ring => ring.getArray().forEach(p => bounds.extend(p)));
-        }
-      };
-      // traverse geometry
-      if (geom) {
-        if (geom.getType && geom.getType() === 'GeometryCollection') {
-          geom.getArray().forEach(extendBounds);
-        } else {
-          extendBounds(geom);
-        }
+    try {
+      const parser = new DOMParser();
+      const kmlDoc = parser.parseFromString(kmlText, 'text/xml');
+      const geojson = toGeoJSON.kml(kmlDoc);
+      if (geojson && geojson.features && geojson.features.length) {
+        map.data.addGeoJson(geojson);
+        map.data.setStyle({ strokeColor:'#ff0000', strokeWeight:2, fillOpacity:0.05 });
+        // compute bounds
+        const bounds = new google.maps.LatLngBounds();
+        geojson.features.forEach(f => {
+          const geom = f.geometry;
+          if (!geom) return;
+          const coordsToExtend = (coords) => {
+            coords.forEach(c => {
+              if (Array.isArray(c[0])) coordsToExtend(c); // nested
+              else bounds.extend({ lat: c[1], lng: c[0] });
+            });
+          };
+          if (geom.type === 'Point') bounds.extend({ lat: geom.coordinates[1], lng: geom.coordinates[0] });
+          else if (geom.type === 'LineString' || geom.type === 'MultiPoint') coordsToExtend(geom.coordinates);
+          else if (geom.type === 'Polygon' || geom.type === 'MultiLineString') coordsToExtend(geom.coordinates);
+          else if (geom.type === 'MultiPolygon') coordsToExtend(geom.coordinates);
+        });
+        if (!bounds.isEmpty()) { map.fitBounds(bounds); kmlLoaded = true; }
       }
-    });
-    // only fit if non-empty
-    if (!bounds.isEmpty()) {
-      map.fitBounds(bounds);
-      kmlLoaded = true;
-    }
-    console.info('KML fallback rendered via toGeoJSON');
+    } catch (err) { console.warn('KML-to-GeoJSON error', err); }
   }).catch(err => {
-    console.warn('KML fallback error:', err.message);
+    console.warn('KML fallback fetch error', err);
   }).finally(() => {
-    // If after small delay KML not loaded, fit to marker bounds
+    // after short delay, if KML didn't fit, fit to marker bounds
     setTimeout(() => {
       if (!kmlLoaded) {
         const b = new google.maps.LatLngBounds();
         builtInMarkers.forEach(m => b.extend({ lat: m.lat, lng: m.lng }));
-        map.fitBounds(b);
+        if (!b.isEmpty()) map.fitBounds(b);
       }
-    }, 1400);
+      // create markers after we have an appropriate viewport
+      createMarkers(restoredMarkers);
+    }, 900);
+  });
+}
+
+/* ---------- MAP INIT (injected after config loads) ---------- */
+function initMapCore() {
+  const fallbackCenter = { lat: builtInMarkers[0].lat, lng: builtInMarkers[0].lng };
+  map = new google.maps.Map(document.getElementById('map'), {
+    center: fallbackCenter,
+    zoom: 17,
+    mapTypeId: 'hybrid',
+    tilt: 0,
+    streetViewControl: false,
+    gestureHandling: 'greedy',
+    rotateControl: true,
   });
 
-  // load history
+  // Load persisted drawings first (into strokePaths)
+  loadDrawingsFromStorage();
+
+  // restore marker state
+  const restored = loadState();
+  // render history
   const storedHistory = JSON.parse(localStorage.getItem(LS_HISTORY) || 'null');
   if (Array.isArray(storedHistory)) historyArr = storedHistory;
   renderHistory();
 
-  // setup toolbar controls
+  // Render saved strokes (if any)
+  if (Array.isArray(strokePaths) && strokePaths.length) {
+    strokePaths.forEach(path => {
+      if (!path || path.length < 2) return;
+      const pts = path.map(p => new google.maps.LatLng(p.lat, p.lng));
+      const poly = new google.maps.Polyline({
+        path: pts,
+        map,
+        strokeColor: path[0].color || '#ff0000',
+        strokeOpacity: 0.95,
+        strokeWeight: path[0].weight || 5,
+        clickable: false,
+        geodesic: true
+      });
+      strokes.push(poly);
+    });
+  }
+
+  // load KML & markers; markers will be created after kml attempt
+  loadKmlThenFit(restored);
+
+  // setup toolbar wiring
   setupToolbarControls();
+
+  // ensure toolbar UI initial state
+  updateToolbarUI();
 }
 
-/* Expose initMap to google callback */
-window.initMap = initMap;
+/* ---------- DYNAMIC LOADER ---------- */
+function loadGoogleMapsAndInit() {
+  if (!window.__MAPS_API_KEY) {
+    console.error('Google Maps API key not found in config.js');
+    alert('Map API key not found. Make sure config.js is present (Vercel env).');
+    return;
+  }
+  // if google maps already present, call core init
+  if (window.google && google.maps) {
+    initMapCore();
+    return;
+  }
+  // inject script
+  const s = document.createElement('script');
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(window.__MAPS_API_KEY)}&libraries=geometry&callback=__LG6_INIT`;
+  s.async = true;
+  s.defer = true;
+  window.__LG6_INIT = function() {
+    initMapCore();
+  };
+  document.head.appendChild(s);
+}
 
-/* DOM ready handlers (mobile offcanvas toggles, reset buttons) */
+/* ---------- START ---------- */
 document.addEventListener('DOMContentLoaded', () => {
-  // history mobile open
-  const offcanvasEl = document.getElementById('mobileHistory');
-  const offcanvas = new bootstrap.Offcanvas(offcanvasEl);
-  document.getElementById('openHistoryMobile').addEventListener('click', () => offcanvas.show());
+  // wire mobile history offcanvas
+  try {
+    const offcanvasEl = document.getElementById('mobileHistory');
+    const offcanvas = new bootstrap.Offcanvas(offcanvasEl);
+    document.getElementById('openHistoryMobile').addEventListener('click', () => offcanvas.show());
+  } catch (e) {}
 
-  // reset all saved
+  // Reset all saved markers
   document.getElementById('resetAll').addEventListener('click', () => {
     if (!confirm('Reset all saved marker data and history?')) return;
     historyArr = [];
@@ -684,6 +700,9 @@ document.addEventListener('DOMContentLoaded', () => {
       m.marker.setIcon({ url: makePinSVG('#007bff'), scaledSize: new google.maps.Size(36,36) });
     });
     saveState(); renderHistory();
-    try { const off = bootstrap.Offcanvas.getInstance(offcanvasEl); off && off.hide(); } catch(e){}
+    try { const off = bootstrap.Offcanvas.getInstance(document.getElementById('mobileHistory')); off && off.hide(); } catch(e){}
   });
+
+  // Load maps and start
+  loadGoogleMapsAndInit();
 });
