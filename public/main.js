@@ -1,5 +1,9 @@
-// main.js - updated full file (replace existing /public/main.js)
-// Key fixes: pinch/no-draw, rotation allowed, zoom 20, improved manual eraser, persistent strokes
+// main.js - complete updated file
+// - Keeps original KML url unchanged
+// - Adds touch-delay to avoid stray line on pinch
+// - Allows rotation (gestureHandling: 'auto')
+// - Eraser improved to remove points continuously (paint-like)
+// - Full persistence and marker/history features retained
 
 // ---------- CONFIG ----------
 const KML_RAW_URL = 'https://raw.githubusercontent.com/kervzcalub1/lg6map/refs/heads/main/kml/Untitled%20project.kml';
@@ -43,8 +47,10 @@ let currentSize = 5;
 let strokes = []; // google.maps.Polyline[]
 let strokePaths = []; // array of arrays of {lat,lng,color,weight}
 
-// Multi-touch (pinch) flag to avoid drawing during pinch-zoom
+// Multi-touch (pinch) flag & touch-start delay to avoid stray first-segment
 let multiTouchActive = false;
+let touchStartTimer = null;
+const TOUCH_START_DELAY_MS = 80; // short delay to confirm single-touch
 
 // ---------- PERSISTENCE ----------
 function loadState() {
@@ -291,42 +297,51 @@ function rebuildStrokesFromPaths() {
   });
 }
 
-// Improved eraser: remove points within radius (meters) and split into segments
-function eraseAtLatLng(latLng, radiusMeters = 4) {
+// Better eraser: remove points within radiusMeters around latLng (meters).
+// This function removes only points near the pointer and splits paths where necessary.
+function eraseAtLatLng(latLng, radiusMeters = 3) {
   if (!latLng) return;
-  const R = 6371000;
+  // prefer google spherical computeDistanceBetween if available
+  const spherical = google && google.maps && google.maps.geometry && google.maps.geometry.spherical;
   let changed = false;
   const newPaths = [];
 
   for (let i = 0; i < strokePaths.length; i++) {
     const path = strokePaths[i];
     if (!path || path.length === 0) continue;
-    // mark points that are far enough to keep
+
+    // Build 'keep' boolean array for each point
     const keep = path.map(pt => {
-      const dLat = (pt.lat - latLng.lat) * Math.PI/180;
-      const dLng = (pt.lng - latLng.lng) * Math.PI/180;
-      const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pt.lat*Math.PI/180)*Math.cos(latLng.lat*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      const dist = R * c;
+      const pLatLng = new google.maps.LatLng(pt.lat, pt.lng);
+      let dist;
+      if (spherical && typeof spherical.computeDistanceBetween === 'function') {
+        dist = spherical.computeDistanceBetween(pLatLng, latLng);
+      } else {
+        // Haversine fallback
+        const R = 6371000;
+        const dLat = (pt.lat - latLng.lat()) * Math.PI/180;
+        const dLng = (pt.lng - latLng.lng()) * Math.PI/180;
+        const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pt.lat*Math.PI/180)*Math.cos(latLng.lat()*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        dist = R * c;
+      }
       return dist > radiusMeters;
     });
 
-    // if all true -> keep entire path
+    // If everything kept -> keep path
     if (keep.every(k => k)) {
       newPaths.push(path);
       continue;
     }
 
     changed = true;
-    // split contiguous kept points into new subpaths
+    // Split contiguous kept points into new subpaths
     let current = [];
     for (let j = 0; j < path.length; j++) {
       if (keep[j]) {
         current.push(path[j]);
       } else {
-        if (current.length >= 2) {
-          newPaths.push(current);
-        }
+        if (current.length >= 2) newPaths.push(current);
         current = [];
       }
     }
@@ -388,7 +403,7 @@ function attachDrawingHandlers() {
   map.addListener('mousedown', (e) => {
     if (!drawMode) return;
     if (eraseMode) {
-      eraseAtLatLng(e.latLng, currentSize * 0.6); // meters approx
+      eraseAtLatLng(e.latLng, currentSize * 0.6);
       return;
     }
     isDrawing = true;
@@ -414,37 +429,45 @@ function attachDrawingHandlers() {
   });
 
   // Map div touch handlers (pixel -> latlng conversion)
-  // NOTE: passive: false so we can call preventDefault() and stop drawing on pinch
+  // NOTE: passive:false so we can prevent drawing on pinch
   mapDiv.addEventListener('touchstart', (ev) => {
     if (!drawMode) return;
+    // If multiple fingers, treat as pinch/rotate -> do not draw
     if (ev.touches && ev.touches.length > 1) {
-      // Multi-touch detected (pinch/rotate) -> do not start drawing
       multiTouchActive = true;
+      // cancel any pending single-touch start
+      if (touchStartTimer) { clearTimeout(touchStartTimer); touchStartTimer = null; }
       return;
     }
+    // Single-touch: set a short timer before starting the stroke.
+    // If second finger arrives within the delay, we cancel and allow pinch.
     multiTouchActive = false;
+    if (touchStartTimer) clearTimeout(touchStartTimer);
     const touch = ev.touches[0];
     const rect = mapDiv.getBoundingClientRect();
     const px = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
-    const latLng = getLatLngFromContainerPixels(px.x, px.y);
-    if (!latLng) return;
-    if (eraseMode) {
-      eraseAtLatLng(latLng, currentSize * 0.6);
-      return;
-    }
-    // start drawing
-    isDrawing = true;
-    currentPolyline = startPolyline(currentColor, currentSize);
-    currentPolyline.getPath().push(latLng);
-    strokePaths[strokePaths.length - 1].push({ lat: latLng.lat(), lng: latLng.lng(), color: currentColor, weight: currentSize });
-    // Do not change gestureHandling - allow rotate/zoom with two-finger gestures
-    ev.preventDefault && ev.preventDefault();
+
+    touchStartTimer = setTimeout(() => {
+      touchStartTimer = null;
+      if (multiTouchActive) return; // somebody else started pinch
+      const latLng = getLatLngFromContainerPixels(px.x, px.y);
+      if (!latLng) return;
+      if (eraseMode) {
+        eraseAtLatLng(latLng, currentSize * 0.6);
+        return;
+      }
+      isDrawing = true;
+      currentPolyline = startPolyline(currentColor, currentSize);
+      currentPolyline.getPath().push(latLng);
+      strokePaths[strokePaths.length - 1].push({ lat: latLng.lat(), lng: latLng.lng(), color: currentColor, weight: currentSize });
+      // Note: we do NOT change gestureHandling so pinch/rotate can still work if finger count increases
+    }, TOUCH_START_DELAY_MS);
   }, { passive: false });
 
   mapDiv.addEventListener('touchmove', (ev) => {
-    // if multi-touch (pinch) then skip drawing to allow pinch-zoom/rotate
+    // If more than one touch, it's pinch/rotate -> do not draw
     if (ev.touches && ev.touches.length > 1) { multiTouchActive = true; return; }
-    if (multiTouchActive) return; // skip until touchend resets
+    if (multiTouchActive) return;
     if (!isDrawing || !currentPolyline) return;
     const touch = ev.touches[0];
     const rect = mapDiv.getBoundingClientRect();
@@ -461,12 +484,14 @@ function attachDrawingHandlers() {
   }, { passive: false });
 
   mapDiv.addEventListener('touchend', (ev) => {
-    // If touchend ended a pinch, reset multiTouchActive properly
+    // If finger count reduced but still >1, stay in multiTouchActive until all lifted
     if (ev.touches && ev.touches.length > 0) {
       multiTouchActive = ev.touches.length > 1;
     } else {
       multiTouchActive = false;
     }
+    // If a touchStart timer is pending (user tapped but didn't wait), cancel it
+    if (touchStartTimer) { clearTimeout(touchStartTimer); touchStartTimer = null; }
     if (isDrawing) {
       isDrawing = false;
       currentPolyline = null;
@@ -636,7 +661,7 @@ function initMapCore() {
     mapTypeId: 'hybrid',
     tilt: 25,               // slight tilt
     streetViewControl: false,
-    gestureHandling: 'greedy',
+    gestureHandling: 'auto', // allow natural rotate/tilt gestures
     rotateControl: true,    // allow rotation
     tiltControl: true,
   });
