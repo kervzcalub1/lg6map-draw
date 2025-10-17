@@ -1,6 +1,5 @@
-// main.js - complete and fixed for lg6map-draw
-// - Uses /config.js for window.__MAPS_API_KEY
-// - Expects index.html and style.css in /public (provided earlier)
+// main.js - complete for LG6Map Draw (replace /public/main.js)
+// Uses window.__MAPS_API_KEY from /config.js injected at build time
 
 // ---------- CONFIG ----------
 const KML_RAW_URL = 'https://raw.githubusercontent.com/kervzcalub1/lg6map/refs/heads/main/kml/Untitled%20project.kml';
@@ -8,7 +7,7 @@ const LS_MARKERS = 'lg6map_markers_v1';
 const LS_HISTORY = 'lg6map_history_v1';
 const DRAW_LS_KEY = 'lg6map_drawings_v1';
 
-// Built-in markers list (lat, lng, image)
+// Built-in markers list
 const builtInMarkers = [
   { lat: 7.083483615107523, lng: 125.62724728562387, image: 'https://picsum.photos/id/1015/800/560' },
   { lat: 7.0837635750295025, lng: 125.62749048383216, image: 'https://picsum.photos/id/1016/800/560' },
@@ -25,7 +24,7 @@ const builtInMarkers = [
   { lat: 7.084852571172857, lng: 125.62841246788105, image: 'https://picsum.photos/id/1040/800/560' },
 ];
 
-// ---------- UTIL: SVG PIN ----------
+// ---------- UTIL: pin SVG ----------
 function makePinSVG(color = '#007bff', size = 36) {
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 24 24'><path fill='${color}' d='M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z'/><circle cx='12' cy='9' r='2.5' fill='#fff'/></svg>`;
   return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
@@ -33,19 +32,21 @@ function makePinSVG(color = '#007bff', size = 36) {
 
 // ---------- APP STATE ----------
 let map;
-let markerObjects = []; // { id, marker, note, date, saved, image, labelWindow }
+let markerObjects = [];
 let historyArr = [];
 
 // Drawing state
 let drawMode = false;
 let eraseMode = false;
 let currentColor = '#ff0000'; // default red
-let currentSize = 5;
-let strokes = []; // google.maps.Polyline[]
-let strokePaths = []; // array of arrays of {lat,lng,color,weight}
+let currentSize = 5; // px (used as strokeWeight)
+let strokes = []; // google.maps.Polyline objects
+let strokePaths = []; // array of arrays [{lat,lng,color,weight}, ...]
 
-// Multi-touch (pinch) flag to avoid drawing during pinch-zoom
+// Multi-touch flag to avoid drawing during pinch/rotate
 let multiTouchActive = false;
+let isDrawing = false;
+let currentPolyline = null;
 
 // ---------- PERSISTENCE ----------
 function loadState() {
@@ -64,9 +65,7 @@ function saveState() {
     const toSave = markerObjects.map(m => ({ id: m.id, note: m.note, date: m.date, saved: m.saved, image: m.image }));
     localStorage.setItem(LS_MARKERS, JSON.stringify(toSave));
     localStorage.setItem(LS_HISTORY, JSON.stringify(historyArr));
-  } catch (e) {
-    console.warn('saveState error', e);
-  }
+  } catch (e) { console.warn('saveState error', e); }
 }
 
 function loadDrawingsFromStorage() {
@@ -76,16 +75,12 @@ function loadDrawingsFromStorage() {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return;
     strokePaths = arr;
-  } catch (e) {
-    console.warn('loadDrawingsFromStorage error', e);
-  }
+  } catch (e) { console.warn('loadDrawingsFromStorage error', e); }
 }
 function saveDrawingsToStorage() {
   try {
     localStorage.setItem(DRAW_LS_KEY, JSON.stringify(strokePaths));
-  } catch (e) {
-    console.warn('saveDrawingsToStorage error', e);
-  }
+  } catch (e) { console.warn('saveDrawingsToStorage error', e); }
 }
 
 // ---------- HISTORY UI ----------
@@ -111,7 +106,6 @@ function renderHistory() {
     listMobile.appendChild(m);
   });
 }
-
 let reviewWindow = null;
 function reviewHistory(h) {
   if (reviewWindow) { reviewWindow.close(); reviewWindow = null; }
@@ -254,10 +248,7 @@ function openMarkerPopup(mObj) {
 
 // ---------- DRAWING IMPLEMENTATION ----------
 
-let isDrawing = false;
-let currentPolyline = null;
-
-// Create a new polyline and add to strokePaths
+// Create new polyline and add a corresponding empty path container to strokePaths
 function startPolyline(color, weight) {
   const pl = new google.maps.Polyline({
     path: [],
@@ -269,7 +260,7 @@ function startPolyline(color, weight) {
     geodesic: true
   });
   strokes.push(pl);
-  strokePaths.push([]); // new path container
+  strokePaths.push([]);
   return pl;
 }
 
@@ -292,23 +283,36 @@ function rebuildStrokesFromPaths() {
   });
 }
 
-function eraseAtLatLng(latLng, radiusMeters = 3) {
+// Erase points inside radius (meters). This removes points, and splits paths.
+// radiusMeters tuned for smooth manual erasing.
+function eraseAtLatLng(latLng, radiusMeters = 4) {
+  if (!latLng) return;
   const R = 6371000;
   let changed = false;
   const newPaths = [];
 
   for (let path of strokePaths) {
-    const kept = [];
+    if (!path || path.length === 0) continue;
+    let current = [];
     for (let pt of path) {
-      const dLat = (pt.lat - latLng.lat()) * Math.PI / 180;
-      const dLng = (pt.lng - latLng.lng()) * Math.PI / 180;
-      const a = Math.sin(dLat/2)**2 + Math.cos(pt.lat*Math.PI/180)*Math.cos(latLng.lat()*Math.PI/180)*Math.sin(dLng/2)**2;
+      const dLat = (pt.lat - latLng.lat()) * Math.PI/180;
+      const dLng = (pt.lng - latLng.lng()) * Math.PI/180;
+      const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pt.lat*Math.PI/180)*Math.cos(latLng.lat()*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
       const dist = R * c;
-      if (dist > radiusMeters) kept.push(pt);
-      else changed = true;
+      // keep point if outside radius
+      if (dist > radiusMeters) {
+        current.push(pt);
+      } else {
+        changed = true;
+        // if the deleted point cuts the path, we'll close current segment and start new
+        if (current.length >= 2) {
+          newPaths.push(current);
+        }
+        current = [];
+      }
     }
-    if (kept.length > 1) newPaths.push(kept);
+    if (current.length >= 2) newPaths.push(current);
   }
 
   if (changed) {
@@ -317,7 +321,6 @@ function eraseAtLatLng(latLng, radiusMeters = 3) {
     saveDrawingsToStorage();
   }
 }
-
 
 function undoLastStroke() {
   if (strokes.length === 0) return;
@@ -332,19 +335,19 @@ function clearAllDrawings() {
   strokes = [];
   strokePaths = [];
   saveDrawingsToStorage();
-  // Do NOT change drawMode (retain current state)
+  // keep drawMode as requested
 }
 
 /* Attach drawing handlers (mouse + touch) */
 function attachDrawingHandlers() {
-  // Remove old listeners to avoid duplicates
+  // Clear prior listeners (map-level) to avoid duplicates
   google.maps.event.clearListeners(map, 'mousedown');
   google.maps.event.clearListeners(map, 'mousemove');
   google.maps.event.clearListeners(map, 'mouseup');
 
   const mapDiv = map.getDiv();
 
-  // Ensure projection overlay exists (for touch pixel->latlng)
+  // Ensure projection overlay exists to convert container pixels -> LatLng
   if (!map.__projOverlay) {
     function P() {}
     P.prototype = new google.maps.OverlayView();
@@ -355,18 +358,27 @@ function attachDrawingHandlers() {
     map.__projOverlay.setMap(map);
   }
 
-  // Mouse events
+  function getLatLngFromContainerPixels(x, y) {
+    const proj = map.__projOverlay.getProjection();
+    if (!proj) return null;
+    const point = new google.maps.Point(x, y);
+    return proj.fromContainerPixelToLatLng(point);
+  }
+
+  // ---------- Mouse handlers ----------
   map.addListener('mousedown', (e) => {
     if (!drawMode) return;
+    // If eraseMode, one mouse click erases a small radius
     if (eraseMode) {
-      eraseAtLatLng(e.latLng, currentSize * 1.5);
+      eraseAtLatLng(e.latLng, Math.max(2, currentSize * 0.6));
       return;
     }
+    // Start drawing with mouse: disable dragging
     isDrawing = true;
     currentPolyline = startPolyline(currentColor, currentSize);
     currentPolyline.getPath().push(e.latLng);
     strokePaths[strokePaths.length - 1].push({ lat: e.latLng.lat(), lng: e.latLng.lng(), color: currentColor, weight: currentSize });
-    map.setOptions({ draggable: false, gestureHandling: 'none' });
+    map.setOptions({ draggable: false });
   });
 
   map.addListener('mousemove', (e) => {
@@ -379,29 +391,19 @@ function attachDrawingHandlers() {
     if (!isDrawing) return;
     isDrawing = false;
     currentPolyline = null;
-    map.setOptions({ draggable: true, gestureHandling: 'greedy' });
+    map.setOptions({ draggable: true });
     saveDrawingsToStorage();
   });
 
-  // Touch events: careful with pinch gestures
-  let touchMoveHandler = (ev) => {
-    // handled below by addEventListener on div
-  };
-
-  // Map div touch handlers (pixel -> latlng conversion)
-  function getLatLngFromContainerPixels(x, y) {
-    const proj = map.__projOverlay.getProjection();
-    if (!proj) return null;
-    const point = new google.maps.Point(x, y);
-    return proj.fromContainerPixelToLatLng(point);
-  }
-
-  // Using DOM touch events on the map container
+  // ---------- Touch handlers (on the map container) ----------
+  // We use DOM touch events here; use passive: false where we call preventDefault()
+  // so we can stop the map from panning during single-touch drawing/erasing.
   mapDiv.addEventListener('touchstart', (ev) => {
     if (!drawMode) return;
+    // Multi-touch -> allow map gestures (pinch/rotate). Do NOT start drawing.
     if (ev.touches && ev.touches.length > 1) {
-      // Multi-touch detected (pinch) -> do not start drawing
       multiTouchActive = true;
+      // Ensure map gestures are allowed for multi-touch
       map.setOptions({ draggable: true, gestureHandling: 'greedy' });
       return;
     }
@@ -411,89 +413,98 @@ function attachDrawingHandlers() {
     const px = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
     const latLng = getLatLngFromContainerPixels(px.x, px.y);
     if (!latLng) return;
+    // If erase mode: start erasing and prevent map dragging while erasing single-touch
     if (eraseMode) {
-      eraseAtLatLng(latLng, currentSize * 1.5);
+      // freeze map so we can erase precisely
+      map.setOptions({ draggable: false });
+      eraseAtLatLng(latLng, Math.max(2, currentSize * 0.6));
+      // don't set isDrawing for erasing: we treat continuous touchmove as repeated eraseAtLatLng calls
       return;
     }
-    // start drawing
+    // Start drawing single-touch: freeze map dragging
     isDrawing = true;
     currentPolyline = startPolyline(currentColor, currentSize);
     currentPolyline.getPath().push(latLng);
     strokePaths[strokePaths.length - 1].push({ lat: latLng.lat(), lng: latLng.lng(), color: currentColor, weight: currentSize });
-    map.setOptions({ draggable: false, gestureHandling: 'none' });
-  }, { passive: true });
+    map.setOptions({ draggable: false });
+    // Prevent default to avoid accidental page scroll
+    ev.preventDefault && ev.preventDefault();
+  }, { passive: false });
 
   mapDiv.addEventListener('touchmove', (ev) => {
-    if (multiTouchActive || (ev.touches && ev.touches.length > 1)) {
-      // user is zooming, skip drawing
+    // If multi-touch, skip drawing so user can pinch/rotate freely
+    if (ev.touches && ev.touches.length > 1) {
+      multiTouchActive = true;
       return;
     }
-    // if multi-touch (pinch) then skip drawing to avoid zigzag
-    if (ev.touches && ev.touches.length > 1) { multiTouchActive = true; return; }
-    if (multiTouchActive) return; // skip until touchend resets
+    if (multiTouchActive) return;
+    if (eraseMode) {
+      // continuous erasing while moving single touch
+      const touch = ev.touches[0];
+      if (!touch) return;
+      const rect = mapDiv.getBoundingClientRect();
+      const px = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+      const latLng = getLatLngFromContainerPixels(px.x, px.y);
+      if (!latLng) return;
+      eraseAtLatLng(latLng, Math.max(2, currentSize * 0.6));
+      ev.preventDefault && ev.preventDefault();
+      return;
+    }
     if (!isDrawing || !currentPolyline) return;
     const touch = ev.touches[0];
+    if (!touch) return;
     const rect = mapDiv.getBoundingClientRect();
     const px = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
     const latLng = getLatLngFromContainerPixels(px.x, px.y);
     if (!latLng) return;
-    if (eraseMode) {
-      eraseAtLatLng(latLng, currentSize * 1.5);
-      return;
-    }
     currentPolyline.getPath().push(latLng);
     strokePaths[strokePaths.length - 1].push({ lat: latLng.lat(), lng: latLng.lng(), color: currentColor, weight: currentSize });
     ev.preventDefault && ev.preventDefault();
   }, { passive: false });
 
   mapDiv.addEventListener('touchend', (ev) => {
-    if (multiTouchActive && (!ev.touches || ev.touches.length === 0)) {
-      multiTouchActive = false;
-      map.setOptions({ draggable: true, gestureHandling: 'greedy' });
-      return; // exit early, no draw finalize
-    }
-    // If touchend ended a pinch, reset multiTouchActive
+    // If a pinch ended, reset multiTouchActive and allow gestures
     if (ev.touches && ev.touches.length > 0) {
-      // still touches remaining, keep flag
       multiTouchActive = ev.touches.length > 1;
     } else {
       multiTouchActive = false;
     }
+    // finalize drawing if we were drawing
     if (isDrawing) {
       isDrawing = false;
       currentPolyline = null;
-      map.setOptions({ draggable: true, gestureHandling: 'greedy' });
       saveDrawingsToStorage();
     }
-  }, { passive: true });
+    // re-enable dragging when single-touch interaction ends
+    // but keep it enabled for multi-touch (we already allowed it)
+    map.setOptions({ draggable: true });
+  }, { passive: false });
 }
 
-// Detach drawing handlers when drawMode false
 function detachDrawingHandlers() {
   google.maps.event.clearListeners(map, 'mousedown');
   google.maps.event.clearListeners(map, 'mousemove');
   google.maps.event.clearListeners(map, 'mouseup');
-  // DOM touch listeners remain attached to div but will no-op when drawMode=false because we check drawMode at handler start
+  // touch listeners remain but no-ops when drawMode=false because we check drawMode in handlers
 }
 
 // ---------- TOOLBAR UI ----------
 function updateToolbarUI() {
-  const toolbar = document.getElementById('drawToolbar');
-  const controls = document.getElementById('toolbarControls');
-  if (!toolbar || !controls) return;
-  if (drawMode) {
-    toolbar.classList.remove('collapsed');
-    controls.setAttribute('aria-hidden', 'false');
-    attachDrawingHandlers();
-  } else {
-    toolbar.classList.add('collapsed');
-    controls.setAttribute('aria-hidden', 'true');
-    detachDrawingHandlers();
+  const btn = document.getElementById('btnDrawToggle');
+  const eraseBtn = document.getElementById('btnEraseMode');
+  if (btn) {
+    if (drawMode) { btn.classList.add('active'); btn.textContent = '🛑 Stop Drawing'; }
+    else { btn.classList.remove('active'); btn.textContent = '✏️ Draw'; }
   }
+  if (eraseBtn) {
+    eraseBtn.classList.toggle('active', eraseMode);
+  }
+  if (drawMode) attachDrawingHandlers();
+  else detachDrawingHandlers();
 }
 
 function setupToolbarControls() {
-  const btnToggle = document.getElementById('btnToggleDraw');
+  const btnToggle = document.getElementById('btnDrawToggle');
   const tbColor = document.getElementById('tbColor');
   const tbSize = document.getElementById('tbSize');
   const btnUndo = document.getElementById('btnUndo');
@@ -501,34 +512,32 @@ function setupToolbarControls() {
   const btnEraseAll = document.getElementById('btnEraseAll');
   const btnSaveDraw = document.getElementById('btnSaveDraw');
 
-  // initialize from UI
-  currentColor = tbColor.value || '#ff0000';
-  currentSize = parseInt(tbSize.value, 10) || 5;
+  // init UI values
+  if (tbColor) currentColor = tbColor.value || currentColor;
+  if (tbSize) currentSize = parseInt(tbSize.value, 10) || currentSize;
 
-  btnToggle.addEventListener('click', () => {
+  if (btnToggle) btnToggle.addEventListener('click', () => {
     drawMode = !drawMode;
-    if (!drawMode) eraseMode = false; // if turning off, also reset erase mode
+    // turning off drawing also disables erase mode
+    if (!drawMode) eraseMode = false;
     updateToolbarUI();
   });
+  if (tbColor) tbColor.addEventListener('change', (e) => { currentColor = e.target.value; });
+  if (tbSize) tbSize.addEventListener('change', (e) => { currentSize = parseInt(e.target.value, 10) || 5; });
 
-  tbColor.addEventListener('change', (e) => { currentColor = e.target.value; });
-  tbSize.addEventListener('change', (e) => { currentSize = parseInt(e.target.value, 10) || 5; });
-
-  btnUndo.addEventListener('click', () => undoLastStroke());
-  btnEraseMode.addEventListener('click', () => {
+  if (btnUndo) btnUndo.addEventListener('click', () => undoLastStroke());
+  if (btnEraseMode) btnEraseMode.addEventListener('click', () => {
     eraseMode = !eraseMode;
-    btnEraseMode.classList.toggle('active', eraseMode);
-    if (eraseMode && !drawMode) {
-      drawMode = true;
-      updateToolbarUI();
-    }
+    // ensure draw mode is active if user toggles erase (so single-touch erasing works)
+    if (eraseMode && !drawMode) drawMode = true;
+    updateToolbarUI();
   });
-  btnEraseAll.addEventListener('click', () => {
+  if (btnEraseAll) btnEraseAll.addEventListener('click', () => {
     if (!confirm('Erase all drawings? This cannot be undone.')) return;
     clearAllDrawings();
-    // keep drawMode state as-is (do not disable)
+    // keep drawMode state unchanged
   });
-  btnSaveDraw.addEventListener('click', () => {
+  if (btnSaveDraw) btnSaveDraw.addEventListener('click', () => {
     saveDrawingsToStorage();
     alert('Drawings saved.');
   });
@@ -551,10 +560,8 @@ function createMarkers(restored) {
       title: `Marker ${id}`,
       icon: { url: makePinSVG(color), scaledSize: new google.maps.Size(36,36) },
     });
-
     const mObj = { id, marker: gm, note: initial.note, date: initial.date, saved: initial.saved, image: initial.image, labelWindow: null };
     if (mObj.saved && (mObj.note || mObj.date)) showSavedLabel(mObj);
-
     gm.addListener('click', () => openMarkerPopup(mObj));
     markerObjects.push(mObj);
   });
@@ -578,7 +585,7 @@ function loadKmlAndFit(restored) {
     console.warn('KmlLayer init failed:', e);
   }
 
-  // fallback using toGeoJSON
+  // fallback to toGeoJSON path
   fetch(KML_RAW_URL).then(r => {
     if (!r.ok) throw new Error('KML fetch failed: ' + r.status);
     return r.text();
@@ -594,7 +601,6 @@ function loadKmlAndFit(restored) {
       geojson.features.forEach(f => {
         const geom = f.geometry;
         if (!geom) return;
-        // generic coordinate walker
         const extendCoords = (coords) => {
           coords.forEach(c => {
             if (Array.isArray(c[0])) extendCoords(c);
@@ -615,27 +621,25 @@ function loadKmlAndFit(restored) {
         builtInMarkers.forEach(m => b.extend({ lat: m.lat, lng: m.lng }));
         if (!b.isEmpty()) map.fitBounds(b);
       }
-      // create markers AFTER we have a proper viewport
+      // create markers after viewport is set
       createMarkers(restored);
     }, 900);
   });
 }
 
-// ---------- MAP INITIALIZATION ----------
+// ---------- MAP INIT ----------
 function initMapCore() {
   const fallbackCenter = { lat: builtInMarkers[0].lat, lng: builtInMarkers[0].lng };
   map = new google.maps.Map(document.getElementById('map'), {
     center: fallbackCenter,
-    zoom: 20,
+    zoom: 20,               // default zoom 20
     mapTypeId: 'hybrid',
-    tilt: 45, // top-down as default
-    heading: 0, // can be rotated via gesture
+    tilt: 45,               // allows some tilt so rotation looks natural
     streetViewControl: false,
-    gestureHandling: 'greedy',
-    rotateControl: true, // allow rotation
+    gestureHandling: 'greedy', // allow single-finger drag, two-finger rotate/zoom
+    rotateControl: true,
     tiltControl: true,
   });
-  
 
   // Load persisted drawing paths
   loadDrawingsFromStorage();
@@ -658,21 +662,21 @@ function initMapCore() {
     });
   }
 
-  // restore marker state & history
+  // Restore markers & history
   const restored = loadState();
   const storedHistory = JSON.parse(localStorage.getItem(LS_HISTORY) || 'null');
   if (Array.isArray(storedHistory)) historyArr = storedHistory;
   renderHistory();
 
-  // load KML and fit viewport, then create markers
+  // Load KML then create markers
   loadKmlAndFit(restored);
 
-  // toolbar wiring
+  // Setup toolbar & attach/detach handlers based on drawMode
   setupToolbarControls();
   updateToolbarUI();
 }
 
-// dynamic loading of Google Maps using config.js injected key
+// load Google Maps script dynamically using injected key
 function loadGoogleMapsAndInit() {
   if (!window.__MAPS_API_KEY) {
     console.error('Google Maps API key missing. Ensure /config.js is present.');
@@ -729,6 +733,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Load Google Maps and start
+  // start maps
   loadGoogleMapsAndInit();
 });
