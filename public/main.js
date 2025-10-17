@@ -1,9 +1,6 @@
-// main.js - complete updated file
-// - Keeps original KML url unchanged
-// - Adds touch-delay to avoid stray line on pinch
-// - Allows rotation (gestureHandling: 'auto')
-// - Eraser improved to remove points continuously (paint-like)
-// - Full persistence and marker/history features retained
+// main.js - complete and fixed for lg6map-draw
+// - Uses /config.js for window.__MAPS_API_KEY
+// - Expects index.html and style.css in /public (provided earlier)
 
 // ---------- CONFIG ----------
 const KML_RAW_URL = 'https://raw.githubusercontent.com/kervzcalub1/lg6map/refs/heads/main/kml/Untitled%20project.kml';
@@ -47,10 +44,8 @@ let currentSize = 5;
 let strokes = []; // google.maps.Polyline[]
 let strokePaths = []; // array of arrays of {lat,lng,color,weight}
 
-// Multi-touch (pinch) flag & touch-start delay to avoid stray first-segment
+// Multi-touch (pinch) flag to avoid drawing during pinch-zoom
 let multiTouchActive = false;
-let touchStartTimer = null;
-const TOUCH_START_DELAY_MS = 80; // short delay to confirm single-touch
 
 // ---------- PERSISTENCE ----------
 function loadState() {
@@ -297,55 +292,23 @@ function rebuildStrokesFromPaths() {
   });
 }
 
-// Better eraser: remove points within radiusMeters around latLng (meters).
-// This function removes only points near the pointer and splits paths where necessary.
 function eraseAtLatLng(latLng, radiusMeters = 3) {
-  if (!latLng) return;
-  // prefer google spherical computeDistanceBetween if available
-  const spherical = google && google.maps && google.maps.geometry && google.maps.geometry.spherical;
+  const R = 6371000;
   let changed = false;
   const newPaths = [];
 
-  for (let i = 0; i < strokePaths.length; i++) {
-    const path = strokePaths[i];
-    if (!path || path.length === 0) continue;
-
-    // Build 'keep' boolean array for each point
-    const keep = path.map(pt => {
-      const pLatLng = new google.maps.LatLng(pt.lat, pt.lng);
-      let dist;
-      if (spherical && typeof spherical.computeDistanceBetween === 'function') {
-        dist = spherical.computeDistanceBetween(pLatLng, latLng);
-      } else {
-        // Haversine fallback
-        const R = 6371000;
-        const dLat = (pt.lat - latLng.lat()) * Math.PI/180;
-        const dLng = (pt.lng - latLng.lng()) * Math.PI/180;
-        const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(pt.lat*Math.PI/180)*Math.cos(latLng.lat()*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-        dist = R * c;
-      }
-      return dist > radiusMeters;
-    });
-
-    // If everything kept -> keep path
-    if (keep.every(k => k)) {
-      newPaths.push(path);
-      continue;
+  for (let path of strokePaths) {
+    const kept = [];
+    for (let pt of path) {
+      const dLat = (pt.lat - latLng.lat()) * Math.PI / 180;
+      const dLng = (pt.lng - latLng.lng()) * Math.PI / 180;
+      const a = Math.sin(dLat/2)**2 + Math.cos(pt.lat*Math.PI/180)*Math.cos(latLng.lat()*Math.PI/180)*Math.sin(dLng/2)**2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      const dist = R * c;
+      if (dist > radiusMeters) kept.push(pt);
+      else changed = true;
     }
-
-    changed = true;
-    // Split contiguous kept points into new subpaths
-    let current = [];
-    for (let j = 0; j < path.length; j++) {
-      if (keep[j]) {
-        current.push(path[j]);
-      } else {
-        if (current.length >= 2) newPaths.push(current);
-        current = [];
-      }
-    }
-    if (current.length >= 2) newPaths.push(current);
+    if (kept.length > 1) newPaths.push(kept);
   }
 
   if (changed) {
@@ -354,6 +317,7 @@ function eraseAtLatLng(latLng, radiusMeters = 3) {
     saveDrawingsToStorage();
   }
 }
+
 
 function undoLastStroke() {
   if (strokes.length === 0) return;
@@ -391,27 +355,18 @@ function attachDrawingHandlers() {
     map.__projOverlay.setMap(map);
   }
 
-  // Helper to convert container pixels to LatLng
-  function getLatLngFromContainerPixels(x, y) {
-    const proj = map.__projOverlay.getProjection();
-    if (!proj) return null;
-    const point = new google.maps.Point(x, y);
-    return proj.fromContainerPixelToLatLng(point);
-  }
-
   // Mouse events
   map.addListener('mousedown', (e) => {
     if (!drawMode) return;
     if (eraseMode) {
-      eraseAtLatLng(e.latLng, currentSize * 0.6);
+      eraseAtLatLng(e.latLng, currentSize * 1.5);
       return;
     }
     isDrawing = true;
     currentPolyline = startPolyline(currentColor, currentSize);
     currentPolyline.getPath().push(e.latLng);
     strokePaths[strokePaths.length - 1].push({ lat: e.latLng.lat(), lng: e.latLng.lng(), color: currentColor, weight: currentSize });
-    // Prevent map dragging while drawing with mouse
-    map.setOptions({ draggable: false });
+    map.setOptions({ draggable: false, gestureHandling: 'none' });
   });
 
   map.addListener('mousemove', (e) => {
@@ -424,50 +379,58 @@ function attachDrawingHandlers() {
     if (!isDrawing) return;
     isDrawing = false;
     currentPolyline = null;
-    map.setOptions({ draggable: true });
+    map.setOptions({ draggable: true, gestureHandling: 'greedy' });
     saveDrawingsToStorage();
   });
 
+  // Touch events: careful with pinch gestures
+  let touchMoveHandler = (ev) => {
+    // handled below by addEventListener on div
+  };
+
   // Map div touch handlers (pixel -> latlng conversion)
-  // NOTE: passive:false so we can prevent drawing on pinch
+  function getLatLngFromContainerPixels(x, y) {
+    const proj = map.__projOverlay.getProjection();
+    if (!proj) return null;
+    const point = new google.maps.Point(x, y);
+    return proj.fromContainerPixelToLatLng(point);
+  }
+
+  // Using DOM touch events on the map container
   mapDiv.addEventListener('touchstart', (ev) => {
     if (!drawMode) return;
-    // If multiple fingers, treat as pinch/rotate -> do not draw
     if (ev.touches && ev.touches.length > 1) {
+      // Multi-touch detected (pinch) -> do not start drawing
       multiTouchActive = true;
-      // cancel any pending single-touch start
-      if (touchStartTimer) { clearTimeout(touchStartTimer); touchStartTimer = null; }
+      map.setOptions({ draggable: true, gestureHandling: 'greedy' });
       return;
     }
-    // Single-touch: set a short timer before starting the stroke.
-    // If second finger arrives within the delay, we cancel and allow pinch.
     multiTouchActive = false;
-    if (touchStartTimer) clearTimeout(touchStartTimer);
     const touch = ev.touches[0];
     const rect = mapDiv.getBoundingClientRect();
     const px = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
-
-    touchStartTimer = setTimeout(() => {
-      touchStartTimer = null;
-      if (multiTouchActive) return; // somebody else started pinch
-      const latLng = getLatLngFromContainerPixels(px.x, px.y);
-      if (!latLng) return;
-      if (eraseMode) {
-        eraseAtLatLng(latLng, currentSize * 0.6);
-        return;
-      }
-      isDrawing = true;
-      currentPolyline = startPolyline(currentColor, currentSize);
-      currentPolyline.getPath().push(latLng);
-      strokePaths[strokePaths.length - 1].push({ lat: latLng.lat(), lng: latLng.lng(), color: currentColor, weight: currentSize });
-      // Note: we do NOT change gestureHandling so pinch/rotate can still work if finger count increases
-    }, TOUCH_START_DELAY_MS);
-  }, { passive: false });
+    const latLng = getLatLngFromContainerPixels(px.x, px.y);
+    if (!latLng) return;
+    if (eraseMode) {
+      eraseAtLatLng(latLng, currentSize * 1.5);
+      return;
+    }
+    // start drawing
+    isDrawing = true;
+    currentPolyline = startPolyline(currentColor, currentSize);
+    currentPolyline.getPath().push(latLng);
+    strokePaths[strokePaths.length - 1].push({ lat: latLng.lat(), lng: latLng.lng(), color: currentColor, weight: currentSize });
+    map.setOptions({ draggable: false, gestureHandling: 'none' });
+  }, { passive: true });
 
   mapDiv.addEventListener('touchmove', (ev) => {
-    // If more than one touch, it's pinch/rotate -> do not draw
+    if (multiTouchActive || (ev.touches && ev.touches.length > 1)) {
+      // user is zooming, skip drawing
+      return;
+    }
+    // if multi-touch (pinch) then skip drawing to avoid zigzag
     if (ev.touches && ev.touches.length > 1) { multiTouchActive = true; return; }
-    if (multiTouchActive) return;
+    if (multiTouchActive) return; // skip until touchend resets
     if (!isDrawing || !currentPolyline) return;
     const touch = ev.touches[0];
     const rect = mapDiv.getBoundingClientRect();
@@ -475,7 +438,7 @@ function attachDrawingHandlers() {
     const latLng = getLatLngFromContainerPixels(px.x, px.y);
     if (!latLng) return;
     if (eraseMode) {
-      eraseAtLatLng(latLng, currentSize * 0.6);
+      eraseAtLatLng(latLng, currentSize * 1.5);
       return;
     }
     currentPolyline.getPath().push(latLng);
@@ -484,20 +447,25 @@ function attachDrawingHandlers() {
   }, { passive: false });
 
   mapDiv.addEventListener('touchend', (ev) => {
-    // If finger count reduced but still >1, stay in multiTouchActive until all lifted
+    if (multiTouchActive && (!ev.touches || ev.touches.length === 0)) {
+      multiTouchActive = false;
+      map.setOptions({ draggable: true, gestureHandling: 'greedy' });
+      return; // exit early, no draw finalize
+    }
+    // If touchend ended a pinch, reset multiTouchActive
     if (ev.touches && ev.touches.length > 0) {
+      // still touches remaining, keep flag
       multiTouchActive = ev.touches.length > 1;
     } else {
       multiTouchActive = false;
     }
-    // If a touchStart timer is pending (user tapped but didn't wait), cancel it
-    if (touchStartTimer) { clearTimeout(touchStartTimer); touchStartTimer = null; }
     if (isDrawing) {
       isDrawing = false;
       currentPolyline = null;
+      map.setOptions({ draggable: true, gestureHandling: 'greedy' });
       saveDrawingsToStorage();
     }
-  }, { passive: false });
+  }, { passive: true });
 }
 
 // Detach drawing handlers when drawMode false
@@ -505,26 +473,27 @@ function detachDrawingHandlers() {
   google.maps.event.clearListeners(map, 'mousedown');
   google.maps.event.clearListeners(map, 'mousemove');
   google.maps.event.clearListeners(map, 'mouseup');
-  // DOM touch listeners remain attached to div but will early-return when drawMode=false
+  // DOM touch listeners remain attached to div but will no-op when drawMode=false because we check drawMode at handler start
 }
 
 // ---------- TOOLBAR UI ----------
 function updateToolbarUI() {
-  const btn = document.getElementById('btnDrawToggle');
-  if (!btn) return;
+  const toolbar = document.getElementById('drawToolbar');
+  const controls = document.getElementById('toolbarControls');
+  if (!toolbar || !controls) return;
   if (drawMode) {
-    btn.classList.add('active');
-    btn.textContent = '🛑 Stop Drawing';
+    toolbar.classList.remove('collapsed');
+    controls.setAttribute('aria-hidden', 'false');
     attachDrawingHandlers();
   } else {
-    btn.classList.remove('active');
-    btn.textContent = '✏️ Draw';
+    toolbar.classList.add('collapsed');
+    controls.setAttribute('aria-hidden', 'true');
     detachDrawingHandlers();
   }
 }
 
 function setupToolbarControls() {
-  const btnToggle = document.getElementById('btnDrawToggle');
+  const btnToggle = document.getElementById('btnToggleDraw');
   const tbColor = document.getElementById('tbColor');
   const tbSize = document.getElementById('tbSize');
   const btnUndo = document.getElementById('btnUndo');
@@ -533,20 +502,20 @@ function setupToolbarControls() {
   const btnSaveDraw = document.getElementById('btnSaveDraw');
 
   // initialize from UI
-  if (tbColor) currentColor = tbColor.value || '#ff0000';
-  if (tbSize) currentSize = parseInt(tbSize.value, 10) || 5;
+  currentColor = tbColor.value || '#ff0000';
+  currentSize = parseInt(tbSize.value, 10) || 5;
 
-  if (btnToggle) btnToggle.addEventListener('click', () => {
+  btnToggle.addEventListener('click', () => {
     drawMode = !drawMode;
     if (!drawMode) eraseMode = false; // if turning off, also reset erase mode
     updateToolbarUI();
   });
 
-  if (tbColor) tbColor.addEventListener('change', (e) => { currentColor = e.target.value; });
-  if (tbSize) tbSize.addEventListener('change', (e) => { currentSize = parseInt(e.target.value, 10) || 5; });
+  tbColor.addEventListener('change', (e) => { currentColor = e.target.value; });
+  tbSize.addEventListener('change', (e) => { currentSize = parseInt(e.target.value, 10) || 5; });
 
-  if (btnUndo) btnUndo.addEventListener('click', () => undoLastStroke());
-  if (btnEraseMode) btnEraseMode.addEventListener('click', () => {
+  btnUndo.addEventListener('click', () => undoLastStroke());
+  btnEraseMode.addEventListener('click', () => {
     eraseMode = !eraseMode;
     btnEraseMode.classList.toggle('active', eraseMode);
     if (eraseMode && !drawMode) {
@@ -554,12 +523,12 @@ function setupToolbarControls() {
       updateToolbarUI();
     }
   });
-  if (btnEraseAll) btnEraseAll.addEventListener('click', () => {
+  btnEraseAll.addEventListener('click', () => {
     if (!confirm('Erase all drawings? This cannot be undone.')) return;
     clearAllDrawings();
     // keep drawMode state as-is (do not disable)
   });
-  if (btnSaveDraw) btnSaveDraw.addEventListener('click', () => {
+  btnSaveDraw.addEventListener('click', () => {
     saveDrawingsToStorage();
     alert('Drawings saved.');
   });
@@ -657,14 +626,16 @@ function initMapCore() {
   const fallbackCenter = { lat: builtInMarkers[0].lat, lng: builtInMarkers[0].lng };
   map = new google.maps.Map(document.getElementById('map'), {
     center: fallbackCenter,
-    zoom: 20,               // DEFAULT ZOOM 20 as requested
+    zoom: 20,
     mapTypeId: 'hybrid',
-    tilt: 25,               // slight tilt
+    tilt: 45, // top-down as default
+    heading: 0, // can be rotated via gesture
     streetViewControl: false,
-    gestureHandling: 'auto', // allow natural rotate/tilt gestures
-    rotateControl: true,    // allow rotation
+    gestureHandling: 'greedy',
+    rotateControl: true, // allow rotation
     tiltControl: true,
   });
+  
 
   // Load persisted drawing paths
   loadDrawingsFromStorage();
